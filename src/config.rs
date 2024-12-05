@@ -1,6 +1,7 @@
-use crate::transformations::Transformation;
+use crate::transformations::{ConfigTransformDemultiplex, Transformation};
 use anyhow::{bail, Context, Result};
 use serde::{de, Deserialize, Deserializer};
+use serde_valid::Validate;
 use std::{collections::HashSet, fmt, marker::PhantomData};
 
 fn string_or_seq_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -100,8 +101,6 @@ pub enum FileFormat {
     None,
 }
 
-
-
 #[allow(clippy::struct_excessive_bools)]
 #[derive(serde::Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -120,6 +119,41 @@ pub struct Output {
     pub keep_index: bool,
     #[serde(default)]
     pub output_hash: bool,
+}
+
+#[derive(serde::Deserialize, Debug, Copy, Clone)]
+pub enum Target {
+    #[serde(alias = "read1")]
+    Read1,
+    #[serde(alias = "read2")]
+    Read2,
+    #[serde(alias = "index1")]
+    Index1,
+    #[serde(alias = "index2")]
+    Index2,
+}
+
+#[derive(serde::Deserialize, Debug, Copy, Clone)]
+pub enum TargetPlusAll {
+    #[serde(alias = "read1")]
+    Read1,
+    #[serde(alias = "read2")]
+    Read2,
+    #[serde(alias = "index1")]
+    Index1,
+    #[serde(alias = "index2")]
+    Index2,
+    #[serde(alias = "all")]
+    All,
+}
+
+#[derive(serde::Deserialize, Debug, Clone, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct RegionDefinition {
+    pub source: Target,
+    pub start: usize,
+    #[validate(minimum = 1)]
+    pub length: usize,
 }
 
 fn default_thread_count() -> usize {
@@ -234,6 +268,14 @@ impl Config {
             t.check_config(&self.input, &self.output)
                 .with_context(|| format!("{t:?}"))?;
         }
+        let demultiplex_count = self
+            .transform
+            .iter()
+            .filter(|t| matches!(t, Transformation::Demultiplex(_)))
+            .count();
+        if demultiplex_count > 1 {
+            bail!("Only one demultiplex transformation is allowed.");
+        }
 
         //apply output if set
         if let Some(output) = &mut self.output {
@@ -244,5 +286,15 @@ impl Config {
         }
 
         Ok(())
+    }
+
+    pub fn get_demultiplex(&self) -> Option<&ConfigTransformDemultiplex> {
+        self.transform
+            .iter()
+            .filter_map(|t| match t {
+                Transformation::Demultiplex(c) => Some(c),
+                _ => None,
+            })
+            .next()
     }
 }

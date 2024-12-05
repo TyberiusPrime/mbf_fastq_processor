@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -10,7 +10,10 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Deserializer};
 use serde_valid::Validate;
 
-use crate::io;
+use crate::{
+    config::{RegionDefinition, Target, TargetPlusAll},
+    io,
+};
 use rand::Rng;
 use rand::SeedableRng;
 use scalable_cuckoo_filter::ScalableCuckooFilter;
@@ -289,7 +292,7 @@ fn extend_seed(seed: u64) -> [u8; 32] {
     extended_seed
 }
 
-fn u8_from_string<'de, D>(deserializer: D) -> core::result::Result<Vec<u8>, D::Error>
+pub fn u8_from_string<'de, D>(deserializer: D) -> core::result::Result<Vec<u8>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -297,6 +300,27 @@ where
     Ok(s.as_bytes().to_vec())
 }
 
+pub fn btreemap_dna_string_from_string<'de, D>(
+    deserializer: D,
+) -> core::result::Result<BTreeMap<Vec<u8>, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: BTreeMap<String, String> = Deserialize::deserialize(deserializer)?;
+    //we store them without separators
+    let s: BTreeMap<Vec<u8>, String> = s
+        .into_iter()
+        .map(|(k, v)| {
+            let k: String = k
+                .to_uppercase()
+                .chars()
+                .filter(|c| matches!(c, 'A' | 'C' | 'G' | 'T' | 'N'))
+                .collect();
+            (k.as_bytes().to_vec(), v)
+        })
+        .collect();
+    Ok(s)
+}
 fn dna_from_string<'de, D>(deserializer: D) -> core::result::Result<Vec<u8>, D::Error>
 where
     D: Deserializer<'de>,
@@ -382,32 +406,6 @@ fn reproducible_cuckoofilter(
         .finish()
 }
 
-#[derive(serde::Deserialize, Debug, Copy, Clone)]
-pub enum Target {
-    #[serde(alias = "read1")]
-    Read1,
-    #[serde(alias = "read2")]
-    Read2,
-    #[serde(alias = "index1")]
-    Index1,
-    #[serde(alias = "index2")]
-    Index2,
-}
-
-#[derive(serde::Deserialize, Debug, Copy, Clone)]
-pub enum TargetPlusAll {
-    #[serde(alias = "read1")]
-    Read1,
-    #[serde(alias = "read2")]
-    Read2,
-    #[serde(alias = "index1")]
-    Index1,
-    #[serde(alias = "index2")]
-    Index2,
-    #[serde(alias = "all")]
-    All,
-}
-
 impl TryInto<Target> for TargetPlusAll {
     type Error = ();
 
@@ -471,12 +469,12 @@ fn default_name_separator() -> Vec<u8> {
     vec![b'_']
 }
 
-#[derive(serde::Deserialize, Debug, Clone)]
+#[derive(serde::Deserialize, Debug, Clone, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigTransformToName {
-    pub source: Target,
-    pub start: usize,
-    pub length: usize,
+    #[validate(min_items = 1)]
+    regions: Vec<RegionDefinition>,
+
     #[serde(
         deserialize_with = "u8_from_string",
         default = "default_readname_end_chars"
@@ -487,6 +485,12 @@ pub struct ConfigTransformToName {
         default = "default_name_separator"
     )]
     pub separator: Vec<u8>,
+
+    #[serde(
+        deserialize_with = "u8_from_string",
+        default = "default_name_separator"
+    )]
+    pub region_separator: Vec<u8>,
 }
 
 #[derive(serde::Deserialize, Debug, Clone, Validate)]
@@ -606,28 +610,6 @@ pub struct ConfigTransformInspect {
 
 #[derive(serde::Deserialize, Debug, Clone, Validate)]
 #[serde(deny_unknown_fields)]
-pub struct ConfigTransformQuantifyRegion {
-    target: Target,
-    infix: String,
-    start: usize,
-
-    #[validate(minimum = 1)]
-    length: usize,
-    #[serde(skip)]
-    collector: HashMap<Vec<u8>, usize>,
-}
-
-#[derive(serde::Deserialize, Debug, Clone, Validate)]
-#[serde(deny_unknown_fields)]
-pub struct RegionDefinition {
-    target: Target,
-    start: usize,
-    #[validate(minimum = 1)]
-    length: usize,
-}
-
-#[derive(serde::Deserialize, Debug, Clone, Validate)]
-#[serde(deny_unknown_fields)]
 pub struct ConfigTransformQuantifyRegions {
     infix: String,
     #[serde(
@@ -728,6 +710,30 @@ pub struct ConfigTransformFilterDuplicates {
     filter: Option<OurCuckCooFilter>,
 }
 
+#[derive(serde::Deserialize, Debug, Validate, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigTransformDemultiplex {
+    #[validate(min_items = 1)]
+    pub regions: Vec<RegionDefinition>,
+    pub max_hamming_distance: u8,
+    pub output_unmatched: bool,
+    #[serde(deserialize_with = "btreemap_dna_string_from_string")]
+    pub barcodes: BTreeMap<Vec<u8>, String>,
+
+    #[serde(skip)]
+    pub barcode_to_tag: Option<HashMap<Vec<u8>, u16>>,
+}
+
+impl ConfigTransformDemultiplex {
+    pub fn init(&mut self) {
+        let mut barcode_to_tag = HashMap::new();
+        for (ii, barcode) in self.barcodes.keys().enumerate() {
+            barcode_to_tag.insert(barcode.clone(), (ii + 1) as u16);
+        }
+        self.barcode_to_tag = Some(barcode_to_tag);
+    }
+}
+
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(tag = "action")]
 pub enum Transformation {
@@ -766,8 +772,9 @@ pub enum Transformation {
     Progress(ConfigTransformProgress),
     Report(Box<ConfigTransformReport>),
     Inspect(ConfigTransformInspect),
-    QuantifyRegion(ConfigTransformQuantifyRegion),
     QuantifyRegions(ConfigTransformQuantifyRegions),
+
+    Demultiplex(ConfigTransformDemultiplex),
 
     InternalDelay(ConfigTransformInternalDelay),
 }
@@ -794,6 +801,17 @@ fn verify_target(target: Target, input_def: &crate::config::Input) -> Result<()>
     Ok(())
 }
 
+fn verify_regions(regions: &[RegionDefinition], input_def: &crate::config::Input) -> Result<()> {
+    for region in regions {
+        verify_target(region.source, input_def)?;
+
+        if region.length == 0 {
+            bail!("Length must be > 0");
+        }
+    }
+    Ok(())
+}
+
 impl Transformation {
     pub fn needs_serial(&self) -> bool {
         // ie. must see all the reads.
@@ -802,7 +820,6 @@ impl Transformation {
             Transformation::Report(_)
                 | Transformation::Inspect(_)
                 | Transformation::Progress(_)
-                | Transformation::QuantifyRegion(_)
                 | Transformation::QuantifyRegions(_)
                 | Transformation::Head(_)
                 | Transformation::Skip(_)
@@ -816,7 +833,6 @@ impl Transformation {
             Transformation::Report(_)
                 | Transformation::Inspect(_)
                 | Transformation::Progress(_)
-                | Transformation::QuantifyRegion(_)
                 | Transformation::QuantifyRegions(_)
         )
     }
@@ -840,21 +856,9 @@ impl Transformation {
             }
             Transformation::Reverse(c) => verify_target(c.target, input_def),
             Transformation::Inspect(c) => verify_target(c.target, input_def),
-            Transformation::QuantifyRegion(c) => verify_target(c.target, input_def),
-            Transformation::QuantifyRegions(c) => {
-                for region in &c.regions {
-                    verify_target(region.target, input_def)?;
-                }
-                Ok(())
-            }
+            Transformation::QuantifyRegions(c) => verify_regions(&c.regions, input_def),
 
-            Transformation::ExtractToName(c) => {
-                verify_target(c.source, input_def)?;
-                if c.length == 0 {
-                    bail!("Length must be > 0");
-                }
-                Ok(())
-            }
+            Transformation::ExtractToName(c) => verify_regions(&c.regions, input_def),
             Transformation::TrimAdapterMismatchTail(c) => {
                 verify_target(c.target, input_def)?;
                 if c.max_mismatches > c.min_length {
@@ -881,6 +885,23 @@ impl Transformation {
                 if let Some(output) = output_def.as_ref() {
                     if output.stdout && c.output_infix.is_none() {
                         bail!("Can't output to stdout and log progress to stdout. Supply an output_infix to Progress");
+                    }
+                }
+                Ok(())
+            }
+            Transformation::Demultiplex(c) => {
+                verify_regions(&c.regions, input_def)?;
+                if c.barcodes.len() > 2_usize.pow(16) - 1 {
+                    bail!("Too many barcodes. Can max demultilex 2^16-1 barcodes");
+                }
+                let region_len: usize = c.regions.iter().map(|x| x.length).sum::<usize>();
+                for barcode in c.barcodes.keys() {
+                    if barcode.len() != region_len {
+                        bail!(
+                            "Barcode length {} doesn't match sum of region lengths {region_len}. Barcode: (separators ommited): {}",
+                            barcode.len(), 
+                            std::str::from_utf8(barcode).unwrap()
+                        );
                     }
                 }
                 Ok(())
@@ -1031,20 +1052,9 @@ impl Transformation {
                 (block, true)
             }
             Transformation::ExtractToName(config) => {
-                block.apply_mut(|read1, read2, index1, index2| {
-                    let source = match config.source {
-                        Target::Read1 => &read1,
-                        Target::Read2 => read2.as_ref().expect("Input def and target mismatch"),
-                        Target::Index1 => index1.as_ref().expect("Input def and target mismatch"),
-                        Target::Index2 => index2.as_ref().expect("Input def and target mismatch"),
-                    };
-                    let extracted: Vec<u8> = source
-                        .seq()
-                        .iter()
-                        .skip(config.start)
-                        .take(config.length)
-                        .copied()
-                        .collect();
+                for ii in 0..block.len() {
+                    let extracted = extract_regions(ii, &block, &config.regions, &config.separator);
+                    let mut read1 = block.read1.get_mut(ii);
 
                     let name = read1.name();
                     let mut split_pos = None;
@@ -1073,7 +1083,7 @@ impl Transformation {
                         }
                     };
                     read1.replace_name(new_name);
-                });
+                }
                 (block, true)
             }
 
@@ -1397,54 +1407,11 @@ impl Transformation {
                 }
                 (block, true)
             }
-            Transformation::QuantifyRegion(config) => {
-                let collector = &mut config.collector;
-                let source = match config.target {
-                    Target::Read1 => &block.read1,
-                    Target::Read2 => block.read2.as_ref().unwrap(),
-                    Target::Index1 => block.index1.as_ref().unwrap(),
-                    Target::Index2 => block.index2.as_ref().unwrap(),
-                };
-                let mut iter = source.get_pseudo_iter();
-                while let Some(read) = iter.pseudo_next() {
-                    let seq = read.seq();
-                    let region = seq
-                        .iter()
-                        .skip(config.start)
-                        .take(config.length)
-                        .copied()
-                        .collect();
-                    *collector.entry(region).or_insert(0) += 1;
-                }
-                (block, true)
-            }
 
             Transformation::QuantifyRegions(config) => {
                 let collector = &mut config.collector;
                 for ii in 0..block.read1.len() {
-                    let mut key: Vec<u8> = Vec::new();
-                    let mut first = true;
-                    for region in &config.regions {
-                        let read = match region.target {
-                            Target::Read1 => &block.read1,
-                            Target::Read2 => block.read2.as_ref().unwrap(),
-                            Target::Index1 => block.index1.as_ref().unwrap(),
-                            Target::Index2 => block.index2.as_ref().unwrap(),
-                        }
-                        .get(ii);
-                        if first {
-                            first = false;
-                        } else {
-                            key.extend(config.separator.iter());
-                        }
-                        key.extend(
-                            read.seq()
-                                .iter()
-                                .skip(region.start)
-                                .take(region.length)
-                                .copied(),
-                        );
-                    }
+                    let key = extract_regions(ii, &block, &config.regions, &config.separator);
                     *collector.entry(key).or_insert(0) += 1;
                 }
                 (block, true)
@@ -1518,6 +1485,38 @@ impl Transformation {
                 block.read2 = Some(read1);
                 (block, true)
             }
+
+            Transformation::Demultiplex(config) => {
+                if config.barcode_to_tag.is_none() {
+                    config.init();
+                }
+                let mut tags: Vec<u16> = vec![0; block.len()];
+                for ii in 0..block.read1.len() {
+                    let key = extract_regions(ii, &block, &config.regions, b"_");
+                    let entry = config.barcode_to_tag.as_ref().unwrap().get(&key);
+                    match entry {
+                        Some(tag) => {
+                            tags[ii] = *tag;
+                        }
+                        None => {
+                            if config.max_hamming_distance > 0 {
+                                for (barcode, tag) in config.barcode_to_tag.as_ref().unwrap()
+                                {
+                                    let distance = bio::alignment::distance::hamming(&key, barcode);
+                                    if distance.try_into().unwrap_or(255u8) <= config.max_hamming_distance {
+                                        tags[ii] = *tag;
+                                        break
+                                    }
+                                }
+                            }
+                            //tag[ii] = 0 -> not found
+                            //todo: hamming distance trial
+                        }
+                    }
+                }
+                block.output_tags = Some(tags);
+                (block, true)
+            }
         }
     }
 
@@ -1544,7 +1543,11 @@ impl Transformation {
                 running += count;
                 reads_with_at_least_this_length[ii] = running;
             }
-            for (ii, item) in part.expected_errors_from_quality_curve.iter_mut().enumerate() {
+            for (ii, item) in part
+                .expected_errors_from_quality_curve
+                .iter_mut()
+                .enumerate()
+            {
                 *item /= reads_with_at_least_this_length[ii] as f64;
             }
             part.duplication_filter.take();
@@ -1631,12 +1634,6 @@ impl Transformation {
 
                 Ok(())
             }
-            Transformation::QuantifyRegion(config) => output_quantification(
-                output_directory,
-                output_prefix,
-                &config.infix,
-                &config.collector,
-            ),
             Transformation::QuantifyRegions(config) => output_quantification(
                 output_directory,
                 output_prefix,
@@ -1646,6 +1643,38 @@ impl Transformation {
             _ => Ok(()),
         }
     }
+}
+
+fn extract_regions(
+    read_no: usize,
+    block: &io::FastQBlocksCombined,
+    regions: &[RegionDefinition],
+    separator: &[u8],
+) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut first = true;
+    for region in regions {
+        let read = match region.source {
+            Target::Read1 => &block.read1,
+            Target::Read2 => block.read2.as_ref().unwrap(),
+            Target::Index1 => block.index1.as_ref().unwrap(),
+            Target::Index2 => block.index2.as_ref().unwrap(),
+        }
+        .get(read_no);
+        if first {
+            first = false;
+        } else {
+            out.extend(separator.iter());
+        }
+        out.extend(
+            read.seq()
+                .iter()
+                .skip(region.start)
+                .take(region.length)
+                .copied(),
+        );
+    }
+    out
 }
 
 fn output_quantification(

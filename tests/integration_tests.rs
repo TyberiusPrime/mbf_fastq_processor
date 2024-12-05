@@ -54,7 +54,7 @@ fn test_noop() {
     let td = run("
 [input]
     read1 = 'sample_data/ten_reads.fq'
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -69,7 +69,7 @@ fn test_noop_minimal() {
     let td = run("
 [input]
     read1 = 'sample_data/minimal.fq'
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -89,7 +89,7 @@ fn test_validate_seq() {
     allowed = 'CGATN'
     target = 'Read1'
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -110,7 +110,7 @@ fn test_validate_seq_fail() {
     allowed = 'CGAT' # note the missing n
     target = 'Read1'
 
-[output] 
+[output]
     prefix = 'output'
 ");
 }
@@ -125,7 +125,7 @@ fn test_validate_phred() {
     action = 'ValidatePhred'
     target = 'Read1'
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -138,14 +138,14 @@ fn test_validate_phred() {
 #[should_panic(expected = "Invalid phred quality found")]
 fn test_validate_phred_fail() {
     //
-        run("
+    run("
 [input]
     read1 = 'sample_data/test_phred.fq'
 [[transform]]
     action = 'ValidatePhred'
     target = 'Read1'
 
-[output] 
+[output]
     prefix = 'output'
 ");
 }
@@ -160,7 +160,7 @@ fn test_cat() {
 [options]
     accept_duplicate_files = true
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -184,7 +184,7 @@ fn test_skip() {
     action='Skip'
     n = 5
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -210,7 +210,7 @@ fn test_gz_input() {
     action='Head'
     n = 5
 
-[output] 
+[output]
     prefix = 'temp'
 ");
     assert!(td.path().join("temp_1.fq").exists());
@@ -302,7 +302,7 @@ fn test_zstd_input() {
     action='Head'
     n = 5
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -325,7 +325,7 @@ fn test_zstd_input_read_swap() {
 [[transform]]
     action = 'SwapR1AndR2'
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -389,7 +389,7 @@ fn test_cut_start() {
     action = 'CutStart'
     n = 3
     target = 'Read1'
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -448,7 +448,7 @@ fn test_cut_end() {
     target = 'Read1'
     action = 'CutEnd'
     n = 2
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -507,7 +507,7 @@ fn test_max_len() {
     action = 'MaxLen'
     n = 5
     target='Read1'
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -576,7 +576,7 @@ fn test_prefix_and_postfix() {
     seq = 'TGCA'
     qual = 'dcba'
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -602,7 +602,7 @@ fn test_reverse() {
     action = 'Reverse'
     target = 'Read1'
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -629,11 +629,9 @@ fn test_umi_extract() {
 
 [[transform]]
     action = 'ExtractToName'
-    source = 'Read1'
-    start = 1
-    length = 5
+    regions = [{source = 'Read1', start = 1, length = 5}]
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -664,11 +662,9 @@ fn test_umi_extract_with_space() {
 
 [[transform]]
     action = 'ExtractToName'
-    source = 'Read1'
-    start = 0
-    length = 6
+    regions = [{source = 'Read1', start = 0, length = 6}]
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -699,14 +695,12 @@ fn test_umi_extract_with_slash() {
 
 [[transform]]
     action = 'ExtractToName'
-    start = 0
-    length = 6
-    source = 'Read1'
+    regions = [{source = 'Read1', start = 0, length = 6}]
     readname_end_chars = '/ ' # i.e. reversed. from the default
     separator = 'XXX'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -744,7 +738,7 @@ fn test_trim_poly_tail_n() {
     max_consecutive_mismatches = 3
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -780,7 +774,7 @@ fn test_filter_min_len() {
     target = 'Read2'
 
 
-[output] 
+[output]
     prefix = 'output'
     keep_index = true
     output_hash = true
@@ -854,7 +848,7 @@ fn test_filter_max_len() {
     target = 'Index1'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -898,7 +892,7 @@ fn test_trim_qual_start() {
     target = 'Read1'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -932,7 +926,7 @@ fn test_trim_qual_end() {
     target = 'Read1'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -959,7 +953,7 @@ fn test_filter_avg_quality() {
     target = 'Read1'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -979,7 +973,7 @@ fn test_convert_phred() {
     action = 'ConvertPhred64To33'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -996,7 +990,7 @@ CCCCDCCCCCCCCCC?A???###############################
 #[should_panic(expected = "Phred 64-33 conversion yielded values below 33")]
 fn test_convert_phred_raises() {
     //
-        run("
+    run("
 [input]
     read1 = 'sample_data/ten_reads.fq'
 
@@ -1004,7 +998,7 @@ fn test_convert_phred_raises() {
     action = 'ConvertPhred64To33'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
 }
@@ -1024,7 +1018,7 @@ fn test_filter_qualified_bases() {
     target = 'Read1'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -1047,7 +1041,7 @@ fn test_filter_too_many_n() {
     target = 'read1'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -1070,7 +1064,7 @@ fn test_subsample() {
     seed  = 42
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -1102,7 +1096,7 @@ fn test_order_maintained_in_single_core_transforms() {
     action='Head'
     n = 500
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -1479,35 +1473,6 @@ fn test_low_complexity_filter() {
 }
 
 #[test]
-fn test_quantify_region() {
-    //
-    let td = run("
-[input]
-    read1 = 'sample_data/ERR664392_1250.fq.gz'
-
-[[transform]]
-    action = 'QuantifyRegion'
-    infix = 'kmer'
-    target = 'Read1'
-    start = 6
-    length = 6
-
-
-[output]
-    prefix = 'output'
-
-");
-    assert!(td.path().join("output_kmer.qr.json").exists());
-    let actual = std::fs::read_to_string(td.path().join("output_kmer.qr.json")).unwrap();
-    let should = std::fs::read_to_string("sample_data/ERR664392_1250.fq.quantify.json").unwrap();
-
-    let json_actual = serde_json::from_str::<serde_json::Value>(&actual).unwrap();
-    let json_should = serde_json::from_str::<serde_json::Value>(&should).unwrap();
-
-    assert_eq!(json_should, json_actual);
-}
-
-#[test]
 fn test_quantify_regions_simple() {
     //
     let td = run("
@@ -1518,7 +1483,7 @@ fn test_quantify_regions_simple() {
     action = 'QuantifyRegions'
     infix = 'kmer'
     regions = [
-            { target = 'Read1', start = 6, length = 6}
+            { source = 'Read1', start = 6, length = 6}
     ]
     separator = '_'
 
@@ -1548,8 +1513,8 @@ fn test_quantify_regions_multi() {
     action = 'QuantifyRegions'
     infix = 'kmer'
     regions = [
-            { target = 'Read1', start = 6, length = 6},
-            { target = 'Read2', start = 10, length = 7}
+            { source = 'Read1', start = 6, length = 6},
+            { source = 'Read2', start = 10, length = 7}
     ]
     separator = 'xyz'
 
@@ -1587,10 +1552,10 @@ fn test_trim_poly_tail_detail() {
     action = 'FilterMinLen'
     target = 'Read1'
     n = 14
-    
 
 
-[output] 
+
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -1627,10 +1592,10 @@ fn test_trim_poly_tail_detail_g() {
     action = 'FilterMinLen'
     target = 'Read1'
     n = 14
-    
 
 
-[output] 
+
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -1668,7 +1633,7 @@ fn test_filter_empty() {
     target = 'Read1'
 
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -1701,7 +1666,7 @@ fn test_trim_poly_tail_long() {
     max_mismatch_rate = 0.10
     max_consecutive_mismatches = 3
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -1755,7 +1720,7 @@ fn test_trim_adapter_mismatch_tail() {
     max_mismatches = 0
     target = 'Read1'
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_1.fq").exists());
@@ -1806,7 +1771,7 @@ fn test_read_length_reporting() {
     json = true
     html = false
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_report.json").exists());
@@ -1829,7 +1794,7 @@ fn test_gzip_blocks_spliting_reads() {
     read1 = 'sample_data/test_gzip_block_unaligned.fastq.gz'
 
 [options]
-    buffer_size = 100 
+    buffer_size = 100
 
 [[transform]]
     action = 'Report'
@@ -1837,7 +1802,7 @@ fn test_gzip_blocks_spliting_reads() {
     json = true
     html = false
 
-[output] 
+[output]
     prefix = 'output'
 ");
     assert!(td.path().join("output_report.json").exists());
@@ -1854,37 +1819,37 @@ fn test_gzip_blocks_spliting_reads() {
 }
 
 #[test]
-#[should_panic(expected="Unexpected symbol where @ was expected")]
+#[should_panic(expected = "Unexpected symbol where @ was expected")]
 fn test_broken_panics() {
     run("
 [input]
     read1 = 'sample_data/broken.fq' # ! instead of @ after 250 reads.
 
-[output] 
+[output]
     prefix = 'output'
 ");
 }
 
 #[test]
-#[should_panic(expected="Unexpected symbol where @ was expected in input.")]
+#[should_panic(expected = "Unexpected symbol where @ was expected in input.")]
 fn test_broken_newline() {
     run("
 [input]
     read1 = 'sample_data/ten_reads_broken_newline.fq'
 
-[output] 
+[output]
     prefix = 'output'
 ");
 }
 
 #[test]
-#[should_panic(expected="Parsing failure, two newlines in sequence")]
+#[should_panic(expected = "Parsing failure, two newlines in sequence")]
 fn test_broken_newline2() {
     run("
 [input]
     read1 = 'sample_data/ten_reads_broken_newline2.fq'
 
-[output] 
+[output]
     prefix = 'output'
 ");
 }
@@ -1897,14 +1862,14 @@ fn test_head_stops_reading() {
     read1 = 'sample_data/broken.fq' # ! instead of @ after 250 reads.
 
 [options]
-    buffer_size = 100 
+    buffer_size = 100
     block_size = 5
 
 [[transform]]
 action = 'Head'
 n = 128
 
-[output] 
+[output]
     prefix = 'output'
 ");
     let actual = std::fs::read_to_string(td.path().join("output_1.fq")).unwrap();
@@ -1927,8 +1892,8 @@ fn test_head_after_quantify() {
     action = 'QuantifyRegions'
     infix = 'kmer'
     regions = [
-            { target = 'Read1', start = 6, length = 6},
-            { target = 'Read2', start = 10, length = 7}
+            { source = 'Read1', start = 6, length = 6},
+            { source = 'Read2', start = 10, length = 7}
     ]
     separator = 'xyz'
 
@@ -1959,7 +1924,7 @@ fn test_head_after_quantify() {
 }
 
 #[test]
-#[should_panic(expected="Can't output to stdout and log progress to stdout. ")]
+#[should_panic(expected = "Can't output to stdout and log progress to stdout. ")]
 fn test_stdout_conflict() {
     //
     run("
@@ -1978,7 +1943,7 @@ fn test_stdout_conflict() {
 }
 
 #[test]
-#[should_panic(expected="nterleaving requires read2 files to be specified.")]
+#[should_panic(expected = "nterleaving requires read2 files to be specified.")]
 fn test_interleave_no_read2() {
     //
     run("
@@ -2138,7 +2103,7 @@ fn test_input_interleaved() {
 }
 
 #[test]
-#[should_panic(expected=" If interleaved is set, read2 must not be set")]
+#[should_panic(expected = " If interleaved is set, read2 must not be set")]
 fn test_input_read2_interleaved_conflict() {
     //
     run("
@@ -2147,13 +2112,226 @@ fn test_input_read2_interleaved_conflict() {
     read2 = 'sample_data/ERR12828869_10k_2.fq.zst'
     interleaved = true
 
-[[transform]]
-    action = 'Progress'
-    n = 5
-
 [output]
     prefix = 'output'
     stdout = true
 
 ");
+}
+
+#[test]
+fn test_simple_demultiplex_basics() {
+    //
+    let td = run("
+[input]
+    read1 = 'sample_data/ERR664392_1250.fq.gz'
+
+[output]
+    prefix = 'output'
+    format = 'Raw'
+
+
+[[transform]]
+    action = 'Head'
+    n = 10
+
+[[transform]]
+    action = 'Demultiplex'
+    regions = [
+        {source = 'read1', start=0, length=2},
+    ]
+    max_hamming_distance = 0
+    output_unmatched = true
+
+[transform.barcodes]
+    CT = 'aaaa'
+    TT = 'gggg'
+");
+
+    assert!(!td.path().join("output_1.fq").exists());
+    assert!(td.path().join("output_aaaa_1.fq").exists());
+    assert!(td.path().join("output_gggg_1.fq").exists());
+    assert!(td.path().join("output_no-barcode_1.fq").exists());
+    let lines_barcode1 = ex::fs::read_to_string(td.path().join("output_aaaa_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+    let lines_barcode2 = ex::fs::read_to_string(td.path().join("output_gggg_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+    let lines_no_barcode = ex::fs::read_to_string(td.path().join("output_no-barcode_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+    assert!(lines_barcode1 + lines_barcode2 + lines_no_barcode == 10 * 4);
+    assert!(lines_barcode1 == 2 * 4);
+    assert!(lines_barcode2 == 1 * 4); //double check this, number might be wrong
+    assert!(lines_no_barcode == (10 - 2 - 1) * 4);
+}
+
+#[test]
+fn test_simple_demultiplex_no_unmatched() {
+    //
+    let td = run("
+[input]
+    read1 = 'sample_data/ERR664392_1250.fq.gz'
+
+[output]
+    prefix = 'output'
+    format = 'Raw'
+
+
+[[transform]]
+    action = 'Head'
+    n = 10
+
+[[transform]]
+    action = 'Demultiplex'
+    regions = [
+        {source = 'read1', start=0, length=2},
+    ]
+    max_hamming_distance = 0
+    output_unmatched = false
+
+[transform.barcodes]
+    CT = 'aaaa'
+    TT = 'gggg'
+");
+
+    assert!(!td.path().join("output_1.fq").exists());
+    assert!(td.path().join("output_aaaa_1.fq").exists());
+    assert!(td.path().join("output_gggg_1.fq").exists());
+    assert!(!td.path().join("output_no-barcode_1.fq").exists());
+    //confirm there are no other .fq in td
+    let fqs_found = td
+        .path()
+        .read_dir()
+        .unwrap()
+        .filter(|x| x.as_ref().unwrap().path().extension().unwrap() == "fq")
+        .count();
+    assert!(fqs_found == 2);
+    let lines_barcode1 = ex::fs::read_to_string(td.path().join("output_aaaa_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+    let lines_barcode2 = ex::fs::read_to_string(td.path().join("output_gggg_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+    //let lines_no_barcode = std::fs::read_to_string("output_no_barcode.fq").unwrap().lines().count();
+    dbg!(&lines_barcode1);
+    dbg!(&lines_barcode2);
+    assert!(lines_barcode1 + lines_barcode2 == (2 + 1) * 4); //that's wrong.
+    assert!(lines_barcode1 == 2 * 4);
+    assert!(lines_barcode2 == 1 * 4);
+    //assert!(lines_no_barcode == 4*4);
+}
+#[test]
+fn test_simple_demultiplex_hamming() {
+    //
+    let td = run("
+[input]
+    read1 = 'sample_data/ERR664392_1250.fq.gz'
+
+[output]
+    prefix = 'output'
+    format = 'Raw'
+
+
+[[transform]]
+    action = 'Head'
+    n = 10
+
+[[transform]]
+    action = 'Demultiplex'
+    regions = [
+        {source = 'read1', start=0, length=4},
+    ]
+    max_hamming_distance = 1
+    output_unmatched = true
+
+[transform.barcodes]
+    ATGA = 'aaaa'
+    CTCC = 'gggg'
+");
+
+    assert!(td.path().join("output_aaaa_1.fq").exists());
+    assert!(td.path().join("output_gggg_1.fq").exists());
+    //confirm there are no other .fq in td
+    let fqs_found = td
+        .path()
+        .read_dir()
+        .unwrap()
+        .filter(|x| x.as_ref().unwrap().path().extension().unwrap() == "fq")
+        .count();
+    assert_eq!(fqs_found, 3);
+    let lines_barcode1 = ex::fs::read_to_string(td.path().join("output_aaaa_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+    let lines_barcode2 = ex::fs::read_to_string(td.path().join("output_gggg_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+    let lines_no_barcode = ex::fs::read_to_string(td.path().join("output_no-barcode_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+
+    //let lines_no_barcode = std::fs::read_to_string("output_no_barcode.fq").unwrap().lines().count();
+    assert!(lines_barcode1 == 1 * 4);
+    assert!(lines_barcode2 == 1 * 4);
+    assert!(lines_no_barcode == 8 * 4);
+}
+
+#[test]
+fn test_simple_demultiplex_single_barcode() {
+    //
+    let td = run("
+[input]
+    read1 = 'sample_data/ERR664392_1250.fq.gz'
+
+[output]
+    prefix = 'output'
+    format = 'Raw'
+
+
+[[transform]]
+    action = 'Head'
+    n = 10
+
+[[transform]]
+    action = 'Demultiplex'
+    regions = [
+        {source = 'read1', start=0, length=2},
+    ]
+    max_hamming_distance = 1
+    output_unmatched = true
+
+[transform.barcodes]
+    CT = 'aaaa'
+");
+
+    assert!(td.path().join("output_aaaa_1.fq").exists());
+    //confirm there are no other .fq in td
+    let fqs_found = td
+        .path()
+        .read_dir()
+        .unwrap()
+        .filter(|x| x.as_ref().unwrap().path().extension().unwrap() == "fq")
+        .count();
+    assert_eq!(fqs_found, 2);
+    let lines_barcode1 = std::fs::read_to_string(td.path().join("output_aaaa_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+        let lines_no_barcode = ex::fs::read_to_string(td.path().join("output_no-barcode_1.fq"))
+        .unwrap()
+        .lines()
+        .count();
+
+    //let lines_no_barcode = std::fs::read_to_string("output_no_barcode.fq").unwrap().lines().count();
+    assert!(lines_barcode1 == 6 * 4);
+    assert!(lines_no_barcode == 4 * 4);
 }

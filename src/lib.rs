@@ -7,6 +7,7 @@ use crossbeam::channel::bounded;
 use ex::Wrapper;
 use flate2::write::GzEncoder;
 use sha2::Digest;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -140,10 +141,11 @@ fn open_output_file<'a>(path: &PathBuf, format: FileFormat) -> Result<Writer<'a>
 }
 
 #[allow(clippy::too_many_lines)]
-fn open_output_files<'a>(
+fn open_one_set_of_output_files<'a>(
     parsed_config: &Config,
     output_directory: &Path,
-) -> Result<(OutputFiles<'a>, String)> {
+    infix: &str,
+) -> Result<OutputFiles<'a>> {
     Ok(match &parsed_config.output {
         Some(output_config) => {
             let suffix = output_config
@@ -167,8 +169,8 @@ fn open_output_files<'a>(
                         } else if output_config.interleave {
                             let interleave = Some(open_output_file(
                                 &output_directory.join(format!(
-                                    "{}_interleaved{}",
-                                    output_config.prefix, suffix
+                                    "{}{}_interleaved{}",
+                                    output_config.prefix, infix, suffix
                                 )),
                                 output_config.format,
                             )?);
@@ -176,15 +178,17 @@ fn open_output_files<'a>(
                         } else {
                             let read1 = Some(open_output_file(
                                 &output_directory
-                                    .join(format!("{}_1{}", output_config.prefix, suffix)),
+                                    .join(format!("{}{}_1{}", output_config.prefix, infix, suffix)),
                                 output_config.format,
                             )?);
                             let read2 = if parsed_config.input.read2.is_some()
                                 || parsed_config.input.interleaved
                             {
                                 Some(open_output_file(
-                                    &output_directory
-                                        .join(format!("{}_2{}", output_config.prefix, suffix)),
+                                    &output_directory.join(format!(
+                                        "{}{}_2{}",
+                                        output_config.prefix, infix, suffix
+                                    )),
                                     output_config.format,
                                 )?)
                             } else {
@@ -196,13 +200,17 @@ fn open_output_files<'a>(
                     let (index1, index2) = if output_config.keep_index {
                         (
                             Some(open_output_file(
-                                &output_directory
-                                    .join(format!("{}_i1{}", output_config.prefix, suffix)),
+                                &output_directory.join(format!(
+                                    "{}{}_i1{}",
+                                    output_config.prefix, infix, suffix
+                                )),
                                 output_config.format,
                             )?),
                             Some(open_output_file(
-                                &output_directory
-                                    .join(format!("{}_i2{}", output_config.prefix, suffix)),
+                                &output_directory.join(format!(
+                                    "{}{}_i2{}",
+                                    output_config.prefix, infix, suffix
+                                )),
                                 output_config.format,
                             )?),
                         )
@@ -235,22 +243,48 @@ fn open_output_files<'a>(
                 [None, None, None, None]
             };
             //todo: open report files.
-            (
-                OutputFiles {
-                    read1,
-                    read2,
-                    index1,
-                    index2,
-                    hashers,
-                },
-                output_config.prefix.to_string(),
-            )
+
+            OutputFiles {
+                read1,
+                read2,
+                index1,
+                index2,
+                hashers,
+            }
         }
-        None => (
-            OutputFiles::default(),
-            "mbf_fastq_preprocessor_output".to_string(),
-        ),
+        None => OutputFiles::default(),
     })
+}
+
+fn open_output_files<'a>(
+    parsed_config: &Config,
+    output_directory: &Path,
+    demultiplex_barcodes: Option<&BTreeMap<Vec<u8>, String>>,
+    include_unmatched_barcodes: bool,
+) -> Result<Vec<OutputFiles<'a>>> {
+    if let Some(barcodes) = demultiplex_barcodes {
+        let mut res = Vec::new();
+        let mut barcode_order = Vec::new();
+        if include_unmatched_barcodes {
+            res.push(open_one_set_of_output_files(
+                parsed_config,
+                output_directory,
+                "_no-barcode",
+            )?);
+        }
+        for (barcode, output_key) in barcodes {
+            barcode_order.push(barcode.clone());
+            res.push(open_one_set_of_output_files(
+                parsed_config,
+                output_directory,
+                &format!("_{output_key}"),
+            )?);
+        }
+        Ok(res)
+    } else {
+        let output_files = open_one_set_of_output_files(parsed_config, output_directory, "")?;
+        Ok(vec![output_files])
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -362,49 +396,6 @@ fn parse_interleaved_and_send(
     }
 }
 
-/* ) -> () {
-    let mut current = 0;
-    let mut last_partial = io::PartialStatus::NoPartial;
-    let mut last_partial_read = None;
-
-    while current < reader_read1.len() {
-        loop {
-            let mut buffer = vec![0; buffer_size];
-            let more = reader_read1[current].read(&mut buffer).unwrap();
-            println!("read bytes: {more} -buffer size {buffer_size} thread: {:?}", thread::current().id());
-            if more == 0 {
-                if last_partial != io::PartialStatus::NoPartial {
-                    panic!("(Sub) fastq file did not end in a complete read"); //todo: promote this
-                                                                               //to an error outside of the thread...
-                }
-                break;
-            }
-            buffer.resize(more, 0); //restrict to actually read bytes
-            let fq_block =
-                io::parse_to_fastq_block(buffer, last_partial, last_partial_read).unwrap();
-            last_partial = fq_block.status;
-            last_partial_read = fq_block.partial_read;
-            dbg!(fq_block.block.entries.len());
-            //
-            //
-            if !fq_block.block.entries.is_empty() {
-                match raw_tx_read1.send(fq_block.block) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        if premature_termination_signaled.load(std::sync::atomic::Ordering::Relaxed)
-                        {
-                            break;
-                        } else {
-                            panic!("Error sending parsed block to next stage: {:?}", e)
-                        }
-                    }
-                }
-            }
-        }
-        current += 1;
-    }
-} */
-
 #[allow(clippy::similar_names)] // I like rx/tx nomenclature
 #[allow(clippy::too_many_lines)] //todo: this is true.
 pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
@@ -417,7 +408,22 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
     #[allow(clippy::if_not_else)]
     {
         let input_files = open_input_files(&parsed.input).context("error opening input files")?;
-        let (mut output_files, output_prefix) = open_output_files(&parsed, &output_directory)?;
+
+        let demultiplex = parsed.get_demultiplex();
+        let do_demultiplex = demultiplex.is_some();
+        let demultiplex_include_unmatched =
+            demultiplex.map(|x| x.output_unmatched).unwrap_or(false);
+        let mut output_files = open_output_files(
+            &parsed,
+            &output_directory,
+            demultiplex.map(|x| &x.barcodes),
+            demultiplex_include_unmatched,
+        )?;
+        let output_prefix = parsed
+            .output
+            .as_ref()
+            .map_or("mbf_fastq_preprocessor_output", |x| &x.prefix)
+            .to_string();
 
         let channel_size = 50;
 
@@ -566,6 +572,7 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
                         read2: block_read2,
                         index1: block_index1,
                         index2: block_index2,
+                        output_tags: None,
                     },
                 );
                 block_no += 1;
@@ -687,24 +694,32 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
                     }
                     if let Some(send_idx) = send {
                         let to_output = buffer.remove(send_idx);
-                        output_block(&to_output.1, &mut output_files, interleaved);
+                        output_block(
+                            &to_output.1,
+                            &mut output_files,
+                            interleaved,
+                            do_demultiplex,
+                            demultiplex_include_unmatched,
+                        );
                     } else {
                         break;
                     }
                 }
             }
             for (ii, infix) in ["1", "2", "i1", "i2"].iter().enumerate() {
-                if let Some(hasher) = output_files.hashers[ii].take() {
-                    let result = hasher.finalize();
-                    let str_result = hex::encode(result);
-                    let mut hash_file = std::fs::File::create(
-                        output_directory.join(format!("{output_prefix}_{infix}.sha256")),
-                    )
-                    .expect("Failed to create hash output file");
-                    //let mut bufwriter = BufWriter::new(hash_file);
-                    hash_file
-                        .write_all(str_result.as_bytes())
-                        .expect("failed to fill hash output file");
+                for set_of_output_files in output_files.iter_mut() {
+                    if let Some(hasher) = set_of_output_files.hashers[ii].take() {
+                        let result = hasher.finalize();
+                        let str_result = hex::encode(result);
+                        let mut hash_file = std::fs::File::create(
+                            output_directory.join(format!("{output_prefix}_{infix}.sha256")),
+                        )
+                        .expect("Failed to create hash output file");
+                        //let mut bufwriter = BufWriter::new(hash_file);
+                        hash_file
+                            .write_all(str_result.as_bytes())
+                            .expect("failed to fill hash output file");
+                    }
                 }
             }
         });
@@ -791,8 +806,43 @@ fn handle_stage(
 #[allow(clippy::if_not_else)]
 fn output_block(
     block: &io::FastQBlocksCombined,
+    output_files: &mut Vec<OutputFiles>,
+    interleaved: bool,
+    do_demultipex: bool,
+    include_unmatched_barcodes: bool,
+) {
+    if do_demultipex {
+        if include_unmatched_barcodes {
+            output_block_demultiplex(block, &mut output_files[0], interleaved, Some(0));
+            for ii in 1..output_files.len() {
+                output_block_demultiplex(
+                    block,
+                    &mut output_files[ii],
+                    interleaved,
+                    Some(ii as u16),
+                );
+            }
+        } else {
+            for ii in 0..output_files.len() {
+                output_block_demultiplex(
+                    block,
+                    &mut output_files[ii],
+                    interleaved,
+                    Some(ii as u16 + 1) ,
+                );
+            }
+        }
+    } else {
+        output_block_demultiplex(block, &mut output_files[0], interleaved, None);
+    }
+}
+
+#[allow(clippy::if_not_else)]
+fn output_block_demultiplex(
+    block: &io::FastQBlocksCombined,
     output_files: &mut OutputFiles,
     interleaved: bool,
+    tag: Option<u16>,
 ) {
     let buffer_size = 1024 * 1024 * 10;
     let mut buffer = Vec::with_capacity(buffer_size);
@@ -803,6 +853,8 @@ fn output_block(
             &mut buffer,
             buffer_size,
             &mut output_files.hashers[0],
+            tag,
+            &block.output_tags,
         );
         output_block_inner(
             output_files.read2.as_mut(),
@@ -810,6 +862,8 @@ fn output_block(
             &mut buffer,
             buffer_size,
             &mut output_files.hashers[1],
+            tag,
+            &block.output_tags,
         );
     } else {
         output_block_interleaved(
@@ -819,6 +873,8 @@ fn output_block(
             &mut buffer,
             buffer_size,
             &mut output_files.hashers[1],
+            tag,
+            &block.output_tags,
         );
     }
     output_block_inner(
@@ -827,6 +883,8 @@ fn output_block(
         &mut buffer,
         buffer_size,
         &mut output_files.hashers[2],
+        tag,
+        &block.output_tags,
     );
     output_block_inner(
         output_files.index2.as_mut(),
@@ -834,6 +892,8 @@ fn output_block(
         &mut buffer,
         buffer_size,
         &mut output_files.hashers[3],
+        tag,
+        &block.output_tags,
     );
 }
 
@@ -843,9 +903,17 @@ fn output_block_inner(
     buffer: &mut Vec<u8>,
     buffer_size: usize,
     hasher: &mut Option<sha2::Sha256>,
+    demultiplex_tag: Option<u16>,
+    output_tags: &Option<Vec<u16>>,
 ) {
     if let Some(of) = output_file {
-        let mut pseudo_iter = block.unwrap().get_pseudo_iter();
+        let mut pseudo_iter = if let Some(demultiplex_tag) = demultiplex_tag {
+            block
+                .unwrap()
+                .get_pseudo_iter_with_tag(demultiplex_tag, output_tags.as_ref().unwrap())
+        } else {
+            block.unwrap().get_pseudo_iter()
+        };
         while let Some(read) = pseudo_iter.pseudo_next() {
             read.append_as_fastq(buffer);
             if buffer.len() > buffer_size {
@@ -872,10 +940,20 @@ fn output_block_interleaved(
     buffer: &mut Vec<u8>,
     buffer_size: usize,
     hasher: &mut Option<sha2::Sha256>,
+    demultiplex_tag: Option<u16>,
+    output_tags: &Option<Vec<u16>>,
 ) {
     if let Some(of) = output_file {
-        let mut pseudo_iter = block_r1.get_pseudo_iter();
-        let mut pseudo_iter_2 = block_r2.get_pseudo_iter();
+        let mut pseudo_iter = if let Some(demultiplex_tag) = demultiplex_tag {
+            block_r1.get_pseudo_iter_with_tag(demultiplex_tag, output_tags.as_ref().unwrap())
+        } else {
+            block_r1.get_pseudo_iter()
+        };
+        let mut pseudo_iter_2 = if let Some(demultiplex_tag) = demultiplex_tag {
+            block_r2.get_pseudo_iter_with_tag(demultiplex_tag, output_tags.as_ref().unwrap())
+        } else {
+            block_r2.get_pseudo_iter()
+        };
         while let Some(read) = pseudo_iter.pseudo_next() {
             let read2 = pseudo_iter_2
                 .pseudo_next()

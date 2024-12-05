@@ -156,11 +156,23 @@ impl FastQBlock {
     pub fn get_mut(&mut self, index: usize) -> WrappedFastQReadMut {
         WrappedFastQReadMut(&mut self.entries[index], &mut self.block)
     }
+
     #[must_use]
-    pub fn get_pseudo_iter(& self) -> FastQBlockPseudoIter {
-        FastQBlockPseudoIter {
+    pub fn get_pseudo_iter(&self) -> FastQBlockPseudoIter {
+        FastQBlockPseudoIter::Simple {
             pos: 0,
             inner: self,
+        }
+    }
+
+    #[must_use]
+    pub fn get_pseudo_iter_with_tag<'a>(&'a self, tag: u16, output_tags: &'a Vec<u16>) -> FastQBlockPseudoIter<'a> {
+        FastQBlockPseudoIter::Filtered {
+            pos: 0,
+            inner: self,
+            tag,
+            output_tags,
+
         }
     }
 
@@ -262,21 +274,52 @@ impl FastQBlock {
     }
 }
 
-pub struct FastQBlockPseudoIter<'a> {
-    pos: usize,
-    inner: &'a FastQBlock,
+pub enum FastQBlockPseudoIter<'a> {
+    Simple {
+        pos: usize,
+        inner: &'a FastQBlock,
+    },
+    Filtered {
+        pos: usize,
+        inner: &'a FastQBlock,
+        tag: u16,
+        output_tags: &'a Vec<u16>,
+    },
 }
 
 impl<'a> FastQBlockPseudoIter<'a> {
-
     pub fn pseudo_next(&mut self) -> Option<WrappedFastQRead<'a>> {
-        let len = self.inner.entries.len();
-        if self.pos >= len || len == 0 {
-            return None;
-        };
-        let e = WrappedFastQRead(&self.inner.entries[self.pos], &self.inner.block);
-        self.pos += 1;
-        Some(e)
+        match self {
+            FastQBlockPseudoIter::Simple { pos, inner } => {
+                let len = inner.entries.len();
+                if *pos >= len || len == 0 {
+                    return None;
+                };
+                let e = WrappedFastQRead(&inner.entries[*pos], &inner.block);
+                *pos += 1;
+                Some(e)
+            }
+            FastQBlockPseudoIter::Filtered {
+                pos,
+                inner,
+                tag,
+                output_tags,
+            } => {
+                let len = inner.entries.len();
+                loop {
+                    if *pos >= len || len == 0 {
+                        return None;
+                    };
+                    if output_tags[*pos] == *tag {
+                        let e = WrappedFastQRead(&inner.entries[*pos], &inner.block);
+                        *pos += 1;
+                        return Some(e);
+                    } else {
+                        *pos += 1;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -402,11 +445,13 @@ impl<'a> WrappedFastQReadMut<'a> {
             return;
         }
 
-        if let Some(suffix_len) =  longest_suffix_that_is_a_prefix(seq, query, max_mismatches, min_length) {
-                let should = &seq[..seq.len() - suffix_len].to_vec();
-                self.0.seq.cut_end(suffix_len);
-                assert_eq!(self.seq(), should);
-                self.0.qual.cut_end(suffix_len);
+        if let Some(suffix_len) =
+            longest_suffix_that_is_a_prefix(seq, query, max_mismatches, min_length)
+        {
+            let should = &seq[..seq.len() - suffix_len].to_vec();
+            self.0.seq.cut_end(suffix_len);
+            assert_eq!(self.seq(), should);
+            self.0.qual.cut_end(suffix_len);
         }
     }
 
@@ -598,8 +643,13 @@ pub struct FourReadsCombined<T> {
     pub index2: Option<T>,
 }
 
-pub type FastQBlocksCombined = FourReadsCombined<FastQBlock>;
-
+pub struct FastQBlocksCombined {
+    pub read1: FastQBlock,
+    pub read2: Option<FastQBlock>,
+    pub index1: Option<FastQBlock>,
+    pub index2: Option<FastQBlock>,
+    pub output_tags: Option<Vec<u16>>, // used by Demultiplex
+}
 
 impl FastQBlocksCombined {
     /// create an empty one with the same options filled
@@ -610,10 +660,15 @@ impl FastQBlocksCombined {
             read2: self.read2.as_ref().map(|_| FastQBlock::empty()),
             index1: self.index1.as_ref().map(|_| FastQBlock::empty()),
             index2: self.index2.as_ref().map(|_| FastQBlock::empty()),
+            output_tags: if self.output_tags.is_some() {
+                Some(Vec::new())
+            } else {
+                None
+            },
         }
     }
     #[must_use]
-    pub fn get_pseudo_iter(& self) -> FastQBlocksCombinedIterator {
+    pub fn get_pseudo_iter(&self) -> FastQBlocksCombinedIterator {
         FastQBlocksCombinedIterator {
             pos: 0,
             inner: self,
@@ -661,10 +716,7 @@ impl FastQBlocksCombined {
         ),
     {
         for ii in 0..self.read1.entries.len() {
-            let mut read1 = WrappedFastQReadMut(
-                &mut self.read1.entries[ii],
-                &mut self.read1.block,
-            );
+            let mut read1 = WrappedFastQReadMut(&mut self.read1.entries[ii], &mut self.read1.block);
             let mut read2 = self
                 .read2
                 .as_mut()
@@ -700,28 +752,26 @@ pub struct CombinedFastQBlock<'a> {
 }
 
 impl<'a> FastQBlocksCombinedIterator<'a> {
-    pub fn pseudo_next(
-        &mut self,
-    ) -> Option<CombinedFastQBlock> {
+    pub fn pseudo_next(&mut self) -> Option<CombinedFastQBlock> {
         let len = self.inner.read1.entries.len();
         if self.pos >= len || len == 0 {
             return None;
         }
 
-        let e = CombinedFastQBlock{
-            read1: WrappedFastQRead(
-                &self.inner.read1.entries[self.pos],
-                &self.inner.read1.block,
-            ),
-            read2: self.inner
+        let e = CombinedFastQBlock {
+            read1: WrappedFastQRead(&self.inner.read1.entries[self.pos], &self.inner.read1.block),
+            read2: self
+                .inner
                 .read2
                 .as_ref()
                 .map(|x| WrappedFastQRead(&x.entries[self.pos], &x.block)),
-            index1: self.inner
+            index1: self
+                .inner
                 .index1
                 .as_ref()
                 .map(|x| WrappedFastQRead(&x.entries[self.pos], &x.block)),
-            index2: self.inner
+            index2: self
+                .inner
                 .index2
                 .as_ref()
                 .map(|x| WrappedFastQRead(&x.entries[self.pos], &x.block)),
@@ -742,27 +792,28 @@ pub struct CombinedFastQBlockMut<'a> {
     pub index2: Option<WrappedFastQReadMut<'a>>,
 }
 impl<'a> FastQBlocksCombinedIteratorMut<'a> {
-    pub fn pseudo_next(
-        &'a mut self,
-    ) -> Option<CombinedFastQBlockMut> {
+    pub fn pseudo_next(&'a mut self) -> Option<CombinedFastQBlockMut> {
         if self.pos >= self.inner.read1.entries.len() {
             return None;
         }
 
-        let e = CombinedFastQBlockMut{
+        let e = CombinedFastQBlockMut {
             read1: WrappedFastQReadMut(
                 &mut self.inner.read1.entries[self.pos],
                 &mut self.inner.read1.block,
             ),
-            read2: self.inner
+            read2: self
+                .inner
                 .read2
                 .as_mut()
                 .map(|x| WrappedFastQReadMut(&mut x.entries[self.pos], &mut x.block)),
-            index1: self.inner
+            index1: self
+                .inner
                 .index1
                 .as_mut()
                 .map(|x| WrappedFastQReadMut(&mut x.entries[self.pos], &mut x.block)),
-            index2: self.inner
+            index2: self
+                .inner
                 .index2
                 .as_mut()
                 .map(|x| WrappedFastQReadMut(&mut x.entries[self.pos], &mut x.block)),
@@ -973,10 +1024,9 @@ pub fn parse_to_fastq_block(
         match end_of_spacer {
             Some(end_of_spacer) => {
                 pos = pos + end_of_spacer + 1;
-                assert!(end_of_spacer == 1, 
+                assert!(end_of_spacer == 1,
                     "Parsing failure, two newlines in sequence instead of the expected one? Near {}",
                         std::str::from_utf8(&input[name_start..name_end]).unwrap_or("utf-8 decoding failure in name"));
-                
             }
             None => {
                 status = PartialStatus::InSpacer;
@@ -1136,9 +1186,7 @@ pub struct InputFiles<'a> {
 
 impl<'a> InputFiles<'a> {
     #[must_use]
-    pub fn transpose(
-        self,
-    ) -> InputSetVec<'a> {
+    pub fn transpose(self) -> InputSetVec<'a> {
         let mut read1 = Vec::new();
         let mut read2 = Vec::new();
         let mut index1 = Vec::new();
