@@ -12,6 +12,7 @@ use serde_valid::Validate;
 
 use crate::{
     config::{RegionDefinition, Target, TargetPlusAll},
+    demultiplex::{DemultiplexInfo, Demultiplexed},
     io,
 };
 use rand::Rng;
@@ -686,10 +687,6 @@ pub struct ConfigTransformReport {
     html: bool,
     #[serde(skip)]
     data: Vec<ReportData>,
-    #[serde(skip)]
-    max_tag: u16,
-    #[serde(skip)]
-    demultiplex_names: Option<Vec<String>>,
     #[serde(default)]
     debug_reproducibility: bool,
 }
@@ -723,18 +720,11 @@ pub struct ConfigTransformDemultiplex {
     pub output_unmatched: bool,
     #[serde(deserialize_with = "btreemap_dna_string_from_string")]
     pub barcodes: BTreeMap<Vec<u8>, String>,
-
-    #[serde(skip)]
-    pub barcode_to_tag: Option<HashMap<Vec<u8>, u16>>,
 }
 
 impl ConfigTransformDemultiplex {
-    pub fn init(&mut self) {
-        let mut barcode_to_tag = HashMap::new();
-        for (ii, barcode) in self.barcodes.keys().enumerate() {
-            barcode_to_tag.insert(barcode.clone(), (ii + 1) as u16);
-        }
-        self.barcode_to_tag = Some(barcode_to_tag);
+    pub fn init(&mut self) -> DemultiplexInfo {
+        return DemultiplexInfo::new(&self.barcodes, self.output_unmatched);
     }
 }
 
@@ -920,6 +910,7 @@ impl Transformation {
         &mut self,
         mut block: io::FastQBlocksCombined,
         block_no: usize,
+        demultiplex_info: &Demultiplexed,
     ) -> (io::FastQBlocksCombined, bool) {
         match self {
             Transformation::Head(config) => {
@@ -1340,7 +1331,9 @@ impl Transformation {
                     (1_000_000, 0.01)
                 };
 
-                for tag in 0..=config.max_tag {
+                for tag in demultiplex_info.iter_tags() {
+                    // no need to capture no-barcode if we're
+                    // not outputing it
                     let output = &mut config.data[tag as usize];
                     for (storage, read_block) in [
                         (&mut output.read1, Some(&block.read1)),
@@ -1371,46 +1364,6 @@ impl Transformation {
                         }
                     }
                 }
-                /*
-
-                                if block.read2.is_some() && config.data.read2.is_none() {
-                                    config.data.read2 = Some(ReportPart::default());
-                                    config.data.read2.as_mut().unwrap().duplication_filter = Some(
-                                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
-                                    );
-                                }
-                                if let Some(read2) = &mut block.read2 {
-                                    let mut iter = read2.get_pseudo_iter();
-                                    while let Some(read) = iter.pseudo_next() {
-                                        update_from_read(config.data.read2.as_mut().unwrap(), &read);
-                                    }
-                                }
-                                if block.index1.is_some() && config.data.index1.is_none() {
-                                    config.data.index1 = Some(ReportPart::default());
-                                    config.data.index1.as_mut().unwrap().duplication_filter = Some(
-                                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
-                                    );
-                                }
-                                if let Some(index1) = &mut block.index1 {
-                                    let mut iter = index1.get_pseudo_iter();
-                                    while let Some(read) = iter.pseudo_next() {
-                                        update_from_read(config.data.read2.as_mut().unwrap(), &read);
-                                    }
-                                }
-
-                                if block.index2.is_some() && config.data.index2.is_none() {
-                                    config.data.index2 = Some(ReportPart::default());
-                                    config.data.index2.as_mut().unwrap().duplication_filter = Some(
-                                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
-                                    );
-                                }
-                                if let Some(index2) = &mut block.index2 {
-                                    let mut iter = index2.get_pseudo_iter();
-                                    while let Some(read) = iter.pseudo_next() {
-                                        update_from_read(config.data.read2.as_mut().unwrap(), &read);
-                                    }
-                                }
-                */
                 (block, true)
             }
 
@@ -1515,21 +1468,22 @@ impl Transformation {
 
             Transformation::Demultiplex(config) => {
                 let mut tags: Vec<u16> = vec![0; block.len()];
+                let demultiplex_info = demultiplex_info.unwrap();
                 for ii in 0..block.read1.len() {
                     let key = extract_regions(ii, &block, &config.regions, b"_");
-                    let entry = config.barcode_to_tag.as_ref().unwrap().get(&key);
+                    let entry = demultiplex_info.barcode_to_tag(&key);
                     match entry {
                         Some(tag) => {
-                            tags[ii] = *tag;
+                            tags[ii] = tag;
                         }
                         None => {
                             if config.max_hamming_distance > 0 {
-                                for (barcode, tag) in config.barcode_to_tag.as_ref().unwrap() {
+                                for (barcode, tag, _) in demultiplex_info.iter_barcodes() {
                                     let distance = bio::alignment::distance::hamming(&key, barcode);
                                     if distance.try_into().unwrap_or(255u8)
                                         <= config.max_hamming_distance
                                     {
-                                        tags[ii] = *tag;
+                                        tags[ii] = tag;
                                         break;
                                     }
                                 }
@@ -1550,8 +1504,8 @@ impl Transformation {
         self_index: usize,
         output_prefix: &str,
         output_directory: &Path,
-        all_transforms: &Vec<Transformation>,
-    ) -> Result<()> {
+        demultiplex_info: &Demultiplexed,
+    ) -> Result<Option<DemultiplexInfo>> {
         match self {
             Transformation::Progress(config) => {
                 if let Some(output_infix) = &config.output_infix {
@@ -1564,59 +1518,38 @@ impl Transformation {
             }
             Transformation::Demultiplex(config) => {
                 println!("init for demultiplex {}", self_index);
-                config.init();
+                return Ok(Some(config.init()));
             }
 
             Transformation::Report(config) => {
                 //if there's a demultiplex step *before* this report,
-                let demultiplex_index = all_transforms
-                    .iter()
-                    .position(|x| matches!(x, Transformation::Demultiplex(_)));
-                if let Some(demultiplex_index) = demultiplex_index {
-                    dbg!(demultiplex_index);
-                    dbg!(self_index);
-                    if demultiplex_index < self_index {
-                        let dm_transform = all_transforms.get(demultiplex_index).unwrap();
-                        let mut demultiplex_names = Vec::new();
-                        println!("demultiplex for {}" , config.infix);
-                        let mut report_data = Vec::new();
-                        if let Transformation::Demultiplex(dm_config) = dm_transform {
-                            let max_tag = *dm_config
-                                .barcode_to_tag
-                                .as_ref()
-                                .unwrap()
-                                .values()
-                                .max()
-                                .expect("no barcodes defined?");
-                            for _ in 0..=max_tag {
-                                report_data.push(ReportData::default());
-                                demultiplex_names.push("no-barcode".to_string());
-                            }
-
-                            for (barcode, tag) in dm_config.barcode_to_tag.as_ref().unwrap().iter()
-                            {
-                                let output_2nd_infix = dm_config.barcodes.get(barcode).unwrap();
-                                demultiplex_names[*tag as usize] = output_2nd_infix.clone();
-                            }
-                            config.demultiplex_names = Some(demultiplex_names);
-                            config.data = report_data;
-                        } else {
-                            panic!("Demultiplex step must be before report step")
-                        }
+                match demultiplex_info {
+                    Demultiplexed::No => {
+                        config.data.push(ReportData::default());
                     }
-                }
-                if config.data.is_empty() {
-                    config.data.push(ReportData::default());
+                    Demultiplexed::Yes(demultiplex_info) => {
+                        let mut report_data = Vec::new();
+                        for _ in 0..demultiplex_info.len() { //yeah, we include no-barcode anyway.
+                            // It's fairly cheap
+                            report_data.push(ReportData::default());
+                        }
+                        config.data = report_data;
+                    }
                 }
             }
             _ => {}
         }
-        Ok(())
+        Ok(None)
     }
 
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::cast_precision_loss)]
-    pub fn finalize(&mut self, output_prefix: &str, output_directory: &Path) -> Result<()> {
+    pub fn finalize(
+        &mut self,
+        output_prefix: &str,
+        output_directory: &Path,
+        demultiplex_info: &Demultiplexed,
+    ) -> Result<()> {
         //happens on the same thread as the processing.
         fn fill_in(part: &mut ReportPart) {
             let mut reads_with_at_least_this_length = vec![0; part.length_distribution.len()];
@@ -1648,7 +1581,7 @@ impl Transformation {
                 if !(config.json || config.html) {
                     return Ok(());
                 }
-                for tag in 0..=config.max_tag {
+                for tag in demultiplex_info.iter_tags() {
                     let data = if config.json || config.html {
                         let report_data = &mut config.data[tag as usize];
                         for p in [
@@ -1661,20 +1594,26 @@ impl Transformation {
                                 fill_in(p);
                             }
                         }
-                        config.data[tag as usize].read_count = report_data.read1.as_ref().unwrap().length_distribution.iter().sum();
+                        config.data[tag as usize].read_count = report_data
+                            .read1
+                            .as_ref()
+                            .unwrap()
+                            .length_distribution
+                            .iter()
+                            .sum();
                         &config.data
                     } else {
                         return Ok(());
                     };
 
-                    let prefix = if let Some(demultiplex_names) = &config.demultiplex_names {
-                        format!(
-                            "{}_{}_{}",
-                            output_prefix, config.infix, demultiplex_names[tag as usize]
-                        )
-                    } else {
-                        format!("{}_{}", output_prefix, config.infix)
+                    let barcode_name = demultiplex_info.get_name(tag as u16);
+                    let barcode_infix = match barcode_name {
+                        Some(x) => format!("_{x}"),
+                        None => "".to_string(),
                     };
+
+                    let prefix = format!("{}_{}{}", output_prefix, config.infix, barcode_infix);
+
                     if config.json {
                         let report_file = std::fs::File::create(
                             output_directory.join(format!("{}.json", prefix)),

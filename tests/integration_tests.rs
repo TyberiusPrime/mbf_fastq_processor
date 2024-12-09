@@ -2207,7 +2207,7 @@ fn test_simple_demultiplex_basics() {
         &ex::fs::read_to_string(td.path().join("output_pre_multiplex.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(v["read_count"], 10);
+    assert_eq!(v["read_count"], 100);
 
     let v = serde_json::from_str::<serde_json::Value>(
         &ex::fs::read_to_string(td.path().join("output_post_multiplex_aaaa.json")).unwrap(),
@@ -2380,6 +2380,11 @@ fn test_simple_demultiplex_single_barcode() {
 [transform.barcodes]
     CT = 'aaaa'
 ");
+    let files_found: Vec<_> = td
+        .path()
+        .read_dir()
+        .unwrap().collect();
+    dbg!(files_found);
 
     assert!(td.path().join("output_aaaa_1.fq").exists());
     //confirm there are no other .fq in td
@@ -2400,6 +2405,8 @@ fn test_simple_demultiplex_single_barcode() {
         .count();
 
     //let lines_no_barcode = std::fs::read_to_string("output_no_barcode.fq").unwrap().lines().count();
+    dbg!(lines_barcode1);
+    dbg!(lines_no_barcode);
     assert!(lines_barcode1 == 6 * 4);
     assert!(lines_no_barcode == 4 * 4);
 }

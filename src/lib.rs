@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::thread;
 
 pub mod config;
+pub mod demultiplex;
 mod fastq_read;
 pub mod io;
 mod transformations;
@@ -23,6 +24,8 @@ mod transformations;
 use config::{Config, FileFormat};
 pub use fastq_read::FastQRead;
 pub use io::{open_input_files, InputFiles, InputSet};
+
+use crate::demultiplex::Demultiplexed;
 
 impl std::fmt::Debug for FastQRead {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -259,37 +262,31 @@ fn open_one_set_of_output_files<'a>(
 fn open_output_files<'a>(
     parsed_config: &Config,
     output_directory: &Path,
-    demultiplex_barcodes: Option<&BTreeMap<Vec<u8>, String>>,
-    include_unmatched_barcodes: bool,
+    demultiplexed: &Demultiplexed,
 ) -> Result<Vec<OutputFiles<'a>>> {
-    if let Some(barcodes) = demultiplex_barcodes {
-        let mut res = Vec::new();
-        let mut barcode_order = Vec::new();
-        if include_unmatched_barcodes {
-            res.push(open_one_set_of_output_files(
-                parsed_config,
-                output_directory,
-                "_no-barcode",
-            )?);
+    match demultiplexed {
+        Demultiplexed::No => {
+            let output_files = open_one_set_of_output_files(parsed_config, output_directory, "")?;
+            Ok(vec![output_files])
         }
-        for (barcode, output_key) in barcodes {
-            barcode_order.push(barcode.clone());
-            res.push(open_one_set_of_output_files(
-                parsed_config,
-                output_directory,
-                &format!("_{output_key}"),
-            )?);
+        Demultiplexed::Yes(demultiplex_info) => {
+            let mut res = Vec::new();
+            for (_barcode, _tag, output_key) in demultiplex_info.iter_barcodes() {
+                dbg!((_barcode, _tag, output_key));
+                res.push(open_one_set_of_output_files(
+                    parsed_config,
+                    output_directory,
+                    &format!("_{output_key}"),
+                )?);
+            }
+            Ok(res)
         }
-        Ok(res)
-    } else {
-        let output_files = open_one_set_of_output_files(parsed_config, output_directory, "")?;
-        Ok(vec![output_files])
     }
 }
 
 #[derive(Debug, Clone)]
 struct Stage {
-    transforms: Vec<transformations::Transformation>,
+    transforms: Vec<(transformations::Transformation, usize)>,
     needs_serial: bool,
     can_terminate: bool, //can we 'skip' throwing all reads at this stage if a Head happend?
 }
@@ -304,7 +301,7 @@ fn split_transforms_into_stages(transforms: &[transformations::Transformation]) 
     let mut current_stage = Vec::new();
     let mut last = None;
     let mut can_terminate = true;
-    for transform in transforms {
+    for (transform_no, transform) in transforms.into_iter().enumerate() {
         let need_serial = transform.needs_serial();
         if transform.must_run_to_completion() {
             can_terminate = false;
@@ -320,7 +317,7 @@ fn split_transforms_into_stages(transforms: &[transformations::Transformation]) 
             last = Some(need_serial);
             current_stage = Vec::new();
         }
-        current_stage.push(transform.clone());
+        current_stage.push((transform.clone(), transform_no));
     }
     stages.push(Stage {
         transforms: current_stage,
@@ -403,40 +400,37 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
     let raw_config = ex::fs::read_to_string(toml_file).context("Could not read toml file.")?;
     let mut parsed = toml::from_str::<Config>(&raw_config).context("Could not parse toml file.")?;
     parsed.check().context("Error in configuration")?;
-    let parsed = parsed;
     //let start_time = std::time::Instant::now();
     #[allow(clippy::if_not_else)]
     {
         let input_files = open_input_files(&parsed.input).context("error opening input files")?;
 
-        let demultiplex = parsed.get_demultiplex();
-        let do_demultiplex = demultiplex.is_some();
-        let demultiplex_include_unmatched =
-            demultiplex.map(|x| x.output_unmatched).unwrap_or(false);
-        let mut output_files = open_output_files(
-            &parsed,
-            &output_directory,
-            demultiplex.map(|x| &x.barcodes),
-            demultiplex_include_unmatched,
-        )?;
+        let channel_size = 50;
         let output_prefix = parsed
             .output
             .as_ref()
             .map_or("mbf_fastq_preprocessor_output", |x| &x.prefix)
             .to_string();
 
-        let channel_size = 50;
-
-
-        let mut out_transforms = parsed.transform.clone();
-        for (index, transform) in ( out_transforms).iter_mut().enumerate() {
-            todo!("We need to see the *inited* transformations so far for the right decisions")
-            transform
-                .initialize(index, &output_prefix, &output_directory, &parsed.transform)
-                .unwrap();
+        let mut demultiplex_info = Demultiplexed::No;
+        let mut demultiplex_start = 0;
+        for (index, transform) in (parsed.transform).iter_mut().enumerate() {
+            let new_demultiplex_info = transform
+                .initialize(index, &output_prefix, &output_directory, &demultiplex_info)
+                .context("Transform initialize failed")?;
+            if let Some(new_demultiplex_info) = new_demultiplex_info {
+                if !matches!(demultiplex_info, Demultiplexed::No) {
+                    panic!("Demultiplexed info already set, but new demultiplex info returned. More than one demultiplex transform not supported");
+                }
+                demultiplex_info = Demultiplexed::Yes(new_demultiplex_info);
+                demultiplex_start = index;
+            }
         }
+        let parsed = parsed;
 
-        let stages = split_transforms_into_stages(&out_transforms);
+        let mut output_files = open_output_files(&parsed, &output_directory, &demultiplex_info)?;
+
+        let stages = split_transforms_into_stages(&parsed.transform);
 
         let channels: Vec<_> = (0..=stages.len())
             .map(|_| {
@@ -616,6 +610,7 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
                 let premature_termination_signaled = premature_termination_signaled.clone();
                 let output_prefix = output_prefix.clone();
                 let output_directory = output_directory.clone();
+                let demultiplex_info2 = demultiplex_info.clone();
                 let processor = if stage.needs_serial {
                     thread::spawn(move || {
                         //we need to ensure the blocks are passed on in order
@@ -640,6 +635,8 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
                                             &output_tx2,
                                             &premature_termination_signaled,
                                             &mut stage,
+                                            &demultiplex_info2,
+                                            demultiplex_start,
                                         );
                                         if !do_continue && stage.can_terminate {
                                             break 'outer;
@@ -650,9 +647,17 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
                                 }
                             }
                         }
-                        for transform in &mut stage.transforms {
+                        for (transform, transform_no) in &mut stage.transforms {
                             transform
-                                .finalize(&output_prefix, &output_directory)
+                                .finalize(
+                                    &output_prefix,
+                                    &output_directory,
+                                    if *transform_no >= demultiplex_start {
+                                        &demultiplex_info2
+                                    } else {
+                                        &Demultiplexed::No
+                                    },
+                                )
                                 .unwrap();
                         }
                     })
@@ -665,6 +670,8 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
                                     &output_tx2,
                                     &premature_termination_signaled,
                                     &mut stage,
+                                    &demultiplex_info2,
+                                    demultiplex_start,
                                 );
                             }
                             Err(_) => {
@@ -700,8 +707,7 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
                             &to_output.1,
                             &mut output_files,
                             interleaved,
-                            do_demultiplex,
-                            demultiplex_include_unmatched,
+                            &demultiplex_info,
                         );
                     } else {
                         break;
@@ -776,12 +782,22 @@ fn handle_stage(
     output_tx2: &crossbeam::channel::Sender<(usize, io::FastQBlocksCombined)>,
     premature_termination_signaled: &Arc<AtomicBool>,
     stage: &mut Stage,
+    demultiplex_info: &Demultiplexed,
+    demultiplex_start: usize,
 ) -> bool {
     let mut out_block = block.1;
     let mut do_continue = true;
     let mut stage_continue;
-    for stage in &mut stage.transforms {
-        (out_block, stage_continue) = stage.transform(out_block, block.0);
+    for (transform, transform_no) in &mut stage.transforms {
+        (out_block, stage_continue) = transform.transform(
+            out_block,
+            block.0,
+            if *transform_no >= demultiplex_start {
+                &demultiplex_info
+            } else {
+                &Demultiplexed::No
+            },
+        );
         do_continue = do_continue && stage_continue;
     }
     match output_tx2.send((block.0, out_block)) {
@@ -810,10 +826,25 @@ fn output_block(
     block: &io::FastQBlocksCombined,
     output_files: &mut Vec<OutputFiles>,
     interleaved: bool,
-    do_demultipex: bool,
-    include_unmatched_barcodes: bool,
+    demultiplexed: &Demultiplexed,
 ) {
-    if do_demultipex {
+    match demultiplexed {
+        Demultiplexed::No => {
+            output_block_demultiplex(block, &mut output_files[0], interleaved, None);
+        }
+        Demultiplexed::Yes(demultiplex_info) => {
+            for (_barcode, tag, _output_key) in demultiplex_info.iter_barcodes() {
+                let output_files = &mut output_files[(tag
+                    - if demultiplex_info.include_no_barcode() {
+                        1
+                    } else {
+                        0
+                    }) as usize];
+                output_block_demultiplex(block, output_files, interleaved, Some(tag));
+            }
+        }
+    }
+    /* if do_demultipex {
         if include_unmatched_barcodes {
             output_block_demultiplex(block, &mut output_files[0], interleaved, Some(0));
             for ii in 1..output_files.len() {
@@ -836,7 +867,7 @@ fn output_block(
         }
     } else {
         output_block_demultiplex(block, &mut output_files[0], interleaved, None);
-    }
+    } */
 }
 
 #[allow(clippy::if_not_else)]

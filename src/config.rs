@@ -287,14 +287,5 @@ impl Config {
 
         Ok(())
     }
-
-    pub fn get_demultiplex(&self) -> Option<&ConfigTransformDemultiplex> {
-        self.transform
-            .iter()
-            .filter_map(|t| match t {
-                Transformation::Demultiplex(c) => Some(c),
-                _ => None,
-            })
-            .next()
-    }
+    
 }
