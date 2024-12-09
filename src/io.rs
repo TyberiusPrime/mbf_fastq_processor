@@ -166,13 +166,16 @@ impl FastQBlock {
     }
 
     #[must_use]
-    pub fn get_pseudo_iter_with_tag<'a>(&'a self, tag: u16, output_tags: &'a Vec<u16>) -> FastQBlockPseudoIter<'a> {
+    pub fn get_pseudo_iter_filtered_to_tag<'a>(
+        &'a self,
+        tag: u16,
+        output_tags: &'a Vec<u16>,
+    ) -> FastQBlockPseudoIter<'a> {
         FastQBlockPseudoIter::Filtered {
             pos: 0,
             inner: self,
             tag,
             output_tags,
-
         }
     }
 

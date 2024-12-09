@@ -685,7 +685,11 @@ pub struct ConfigTransformReport {
     json: bool,
     html: bool,
     #[serde(skip)]
-    data: ReportData,
+    data: Vec<ReportData>,
+    #[serde(skip)]
+    max_tag: u16,
+    #[serde(skip)]
+    demultiplex_names: Option<Vec<String>>,
     #[serde(default)]
     debug_reproducibility: bool,
 }
@@ -899,7 +903,7 @@ impl Transformation {
                     if barcode.len() != region_len {
                         bail!(
                             "Barcode length {} doesn't match sum of region lengths {region_len}. Barcode: (separators ommited): {}",
-                            barcode.len(), 
+                            barcode.len(),
                             std::str::from_utf8(barcode).unwrap()
                         );
                     }
@@ -1329,61 +1333,84 @@ impl Transformation {
                         //min, maximum read length?
                     }
                 }
-                config.data.read_count += block.len();
                 let (initial_capacity, false_positive_probability) = if config.debug_reproducibility
                 {
                     (100, 0.1)
                 } else {
                     (1_000_000, 0.01)
                 };
-                if config.data.read1.is_none() {
-                    config.data.read1 = Some(ReportPart::default());
-                    config.data.read1.as_mut().unwrap().duplication_filter = Some(
-                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
-                    );
-                }
-                let mut iter = block.read1.get_pseudo_iter();
-                while let Some(read) = iter.pseudo_next() {
-                    update_from_read(config.data.read1.as_mut().unwrap(), &read);
-                }
 
-                if block.read2.is_some() && config.data.read2.is_none() {
-                    config.data.read2 = Some(ReportPart::default());
-                    config.data.read2.as_mut().unwrap().duplication_filter = Some(
-                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
-                    );
-                }
-                if let Some(read2) = &mut block.read2 {
-                    let mut iter = read2.get_pseudo_iter();
-                    while let Some(read) = iter.pseudo_next() {
-                        update_from_read(config.data.read2.as_mut().unwrap(), &read);
+                for tag in 0..=config.max_tag {
+                    let output = &mut config.data[tag as usize];
+                    for (storage, read_block) in [
+                        (&mut output.read1, Some(&block.read1)),
+                        (&mut output.read2, block.read2.as_ref()),
+                        (&mut output.index1, block.index1.as_ref()),
+                        (&mut output.index2, block.index2.as_ref()),
+                    ] {
+                        if read_block.is_some() {
+                            if storage.is_none() {
+                                *storage = Some(ReportPart::default());
+                                storage.as_mut().unwrap().duplication_filter =
+                                    Some(reproducible_cuckoofilter(
+                                        42,
+                                        initial_capacity,
+                                        false_positive_probability,
+                                    ));
+                            }
+                            let mut iter = match &block.output_tags {
+                                Some(output_tags) => read_block
+                                    .as_ref()
+                                    .unwrap()
+                                    .get_pseudo_iter_filtered_to_tag(tag, output_tags),
+                                None => read_block.as_ref().unwrap().get_pseudo_iter(),
+                            };
+                            while let Some(read) = iter.pseudo_next() {
+                                update_from_read(storage.as_mut().unwrap(), &read);
+                            }
+                        }
                     }
                 }
-                if block.index1.is_some() && config.data.index1.is_none() {
-                    config.data.index1 = Some(ReportPart::default());
-                    config.data.index1.as_mut().unwrap().duplication_filter = Some(
-                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
-                    );
-                }
-                if let Some(index1) = &mut block.index1 {
-                    let mut iter = index1.get_pseudo_iter();
-                    while let Some(read) = iter.pseudo_next() {
-                        update_from_read(config.data.read2.as_mut().unwrap(), &read);
-                    }
-                }
+                /*
 
-                if block.index2.is_some() && config.data.index2.is_none() {
-                    config.data.index2 = Some(ReportPart::default());
-                    config.data.index2.as_mut().unwrap().duplication_filter = Some(
-                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
-                    );
-                }
-                if let Some(index2) = &mut block.index2 {
-                    let mut iter = index2.get_pseudo_iter();
-                    while let Some(read) = iter.pseudo_next() {
-                        update_from_read(config.data.read2.as_mut().unwrap(), &read);
-                    }
-                }
+                                if block.read2.is_some() && config.data.read2.is_none() {
+                                    config.data.read2 = Some(ReportPart::default());
+                                    config.data.read2.as_mut().unwrap().duplication_filter = Some(
+                                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
+                                    );
+                                }
+                                if let Some(read2) = &mut block.read2 {
+                                    let mut iter = read2.get_pseudo_iter();
+                                    while let Some(read) = iter.pseudo_next() {
+                                        update_from_read(config.data.read2.as_mut().unwrap(), &read);
+                                    }
+                                }
+                                if block.index1.is_some() && config.data.index1.is_none() {
+                                    config.data.index1 = Some(ReportPart::default());
+                                    config.data.index1.as_mut().unwrap().duplication_filter = Some(
+                                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
+                                    );
+                                }
+                                if let Some(index1) = &mut block.index1 {
+                                    let mut iter = index1.get_pseudo_iter();
+                                    while let Some(read) = iter.pseudo_next() {
+                                        update_from_read(config.data.read2.as_mut().unwrap(), &read);
+                                    }
+                                }
+
+                                if block.index2.is_some() && config.data.index2.is_none() {
+                                    config.data.index2 = Some(ReportPart::default());
+                                    config.data.index2.as_mut().unwrap().duplication_filter = Some(
+                                        reproducible_cuckoofilter(42, initial_capacity, false_positive_probability),
+                                    );
+                                }
+                                if let Some(index2) = &mut block.index2 {
+                                    let mut iter = index2.get_pseudo_iter();
+                                    while let Some(read) = iter.pseudo_next() {
+                                        update_from_read(config.data.read2.as_mut().unwrap(), &read);
+                                    }
+                                }
+                */
                 (block, true)
             }
 
@@ -1487,9 +1514,6 @@ impl Transformation {
             }
 
             Transformation::Demultiplex(config) => {
-                if config.barcode_to_tag.is_none() {
-                    config.init();
-                }
                 let mut tags: Vec<u16> = vec![0; block.len()];
                 for ii in 0..block.read1.len() {
                     let key = extract_regions(ii, &block, &config.regions, b"_");
@@ -1500,12 +1524,13 @@ impl Transformation {
                         }
                         None => {
                             if config.max_hamming_distance > 0 {
-                                for (barcode, tag) in config.barcode_to_tag.as_ref().unwrap()
-                                {
+                                for (barcode, tag) in config.barcode_to_tag.as_ref().unwrap() {
                                     let distance = bio::alignment::distance::hamming(&key, barcode);
-                                    if distance.try_into().unwrap_or(255u8) <= config.max_hamming_distance {
+                                    if distance.try_into().unwrap_or(255u8)
+                                        <= config.max_hamming_distance
+                                    {
                                         tags[ii] = *tag;
-                                        break
+                                        break;
                                     }
                                 }
                             }
@@ -1520,14 +1545,71 @@ impl Transformation {
         }
     }
 
-    pub fn initialize(&mut self, output_prefix: &str, output_directory: &Path) -> Result<()> {
-        if let Transformation::Progress(config) = self {
-            if let Some(output_infix) = &config.output_infix {
-                config.filename =
-                    Some(output_directory.join(format!("{output_prefix}_{output_infix}.progress")));
-                //create empty file so we are sure we can write there
-                let _ = std::fs::File::create(config.filename.as_ref().unwrap())?;
+    pub fn initialize(
+        &mut self,
+        self_index: usize,
+        output_prefix: &str,
+        output_directory: &Path,
+        all_transforms: &Vec<Transformation>,
+    ) -> Result<()> {
+        match self {
+            Transformation::Progress(config) => {
+                if let Some(output_infix) = &config.output_infix {
+                    config.filename = Some(
+                        output_directory.join(format!("{output_prefix}_{output_infix}.progress")),
+                    );
+                    //create empty file so we are sure we can write there
+                    let _ = std::fs::File::create(config.filename.as_ref().unwrap())?;
+                }
             }
+            Transformation::Demultiplex(config) => {
+                println!("init for demultiplex {}", self_index);
+                config.init();
+            }
+
+            Transformation::Report(config) => {
+                //if there's a demultiplex step *before* this report,
+                let demultiplex_index = all_transforms
+                    .iter()
+                    .position(|x| matches!(x, Transformation::Demultiplex(_)));
+                if let Some(demultiplex_index) = demultiplex_index {
+                    dbg!(demultiplex_index);
+                    dbg!(self_index);
+                    if demultiplex_index < self_index {
+                        let dm_transform = all_transforms.get(demultiplex_index).unwrap();
+                        let mut demultiplex_names = Vec::new();
+                        println!("demultiplex for {}" , config.infix);
+                        let mut report_data = Vec::new();
+                        if let Transformation::Demultiplex(dm_config) = dm_transform {
+                            let max_tag = *dm_config
+                                .barcode_to_tag
+                                .as_ref()
+                                .unwrap()
+                                .values()
+                                .max()
+                                .expect("no barcodes defined?");
+                            for _ in 0..=max_tag {
+                                report_data.push(ReportData::default());
+                                demultiplex_names.push("no-barcode".to_string());
+                            }
+
+                            for (barcode, tag) in dm_config.barcode_to_tag.as_ref().unwrap().iter()
+                            {
+                                let output_2nd_infix = dm_config.barcodes.get(barcode).unwrap();
+                                demultiplex_names[*tag as usize] = output_2nd_infix.clone();
+                            }
+                            config.demultiplex_names = Some(demultiplex_names);
+                            config.data = report_data;
+                        } else {
+                            panic!("Demultiplex step must be before report step")
+                        }
+                    }
+                }
+                if config.data.is_empty() {
+                    config.data.push(ReportData::default());
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -1563,41 +1645,57 @@ impl Transformation {
         }
         match self {
             Transformation::Report(config) => {
-                let data = if config.json || config.html {
-                    for p in [
-                        &mut config.data.read1,
-                        &mut config.data.read2,
-                        &mut config.data.index1,
-                        &mut config.data.index2,
-                    ] {
-                        if let Some(p) = p.as_mut() {
-                            fill_in(p);
-                        }
-                    }
-                    &config.data
-                } else {
+                if !(config.json || config.html) {
                     return Ok(());
-                };
-                if config.json {
-                    let report_file = std::fs::File::create(
-                        output_directory.join(format!("{}_{}.json", output_prefix, config.infix)),
-                    )?;
-                    let mut bufwriter = BufWriter::new(report_file);
-                    serde_json::to_writer_pretty(&mut bufwriter, &data)?;
                 }
-                if config.html {
-                    let report_file = std::fs::File::create(
-                        output_directory.join(format!("{}_{}.html", output_prefix, config.infix)),
-                    )?;
-                    let mut bufwriter = BufWriter::new(report_file);
-                    let template = include_str!("../html/template.html");
-                    let chartjs = include_str!("../html/chart/chart.umd.min.js");
-                    let json = serde_json::to_string_pretty(&data).unwrap();
-                    let html = template
-                        .replace("%TITLE%", &config.infix)
-                        .replace("\"%DATA%\"", &json)
-                        .replace("/*%CHART%*/", chartjs);
-                    bufwriter.write_all(html.as_bytes())?;
+                for tag in 0..=config.max_tag {
+                    let data = if config.json || config.html {
+                        let report_data = &mut config.data[tag as usize];
+                        for p in [
+                            &mut report_data.read1,
+                            &mut report_data.read2,
+                            &mut report_data.index1,
+                            &mut report_data.index2,
+                        ] {
+                            if let Some(p) = p.as_mut() {
+                                fill_in(p);
+                            }
+                        }
+                        config.data[tag as usize].read_count = report_data.read1.as_ref().unwrap().length_distribution.iter().sum();
+                        &config.data
+                    } else {
+                        return Ok(());
+                    };
+
+                    let prefix = if let Some(demultiplex_names) = &config.demultiplex_names {
+                        format!(
+                            "{}_{}_{}",
+                            output_prefix, config.infix, demultiplex_names[tag as usize]
+                        )
+                    } else {
+                        format!("{}_{}", output_prefix, config.infix)
+                    };
+                    if config.json {
+                        let report_file = std::fs::File::create(
+                            output_directory.join(format!("{}.json", prefix)),
+                        )?;
+                        let mut bufwriter = BufWriter::new(report_file);
+                        serde_json::to_writer_pretty(&mut bufwriter, &data[tag as usize])?;
+                    }
+                    if config.html {
+                        let report_file = std::fs::File::create(
+                            output_directory.join(format!("{}.html", prefix)),
+                        )?;
+                        let mut bufwriter = BufWriter::new(report_file);
+                        let template = include_str!("../html/template.html");
+                        let chartjs = include_str!("../html/chart/chart.umd.min.js");
+                        let json = serde_json::to_string_pretty(&data[tag as usize]).unwrap();
+                        let html = template
+                            .replace("%TITLE%", &config.infix)
+                            .replace("\"%DATA%\"", &json)
+                            .replace("/*%CHART%*/", chartjs);
+                        bufwriter.write_all(html.as_bytes())?;
+                    }
                 }
                 Ok(())
             }

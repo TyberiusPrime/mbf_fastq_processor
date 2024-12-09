@@ -427,7 +427,16 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
 
         let channel_size = 50;
 
-        let mut stages = split_transforms_into_stages(&parsed.transform);
+
+        let mut out_transforms = parsed.transform.clone();
+        for (index, transform) in ( out_transforms).iter_mut().enumerate() {
+            todo!("We need to see the *inited* transformations so far for the right decisions")
+            transform
+                .initialize(index, &output_prefix, &output_directory, &parsed.transform)
+                .unwrap();
+        }
+
+        let stages = split_transforms_into_stages(&out_transforms);
 
         let channels: Vec<_> = (0..=stages.len())
             .map(|_| {
@@ -597,13 +606,6 @@ pub fn run(toml_file: &Path, output_directory: &Path) -> Result<()> {
         // println!("Thread count {}", thread_count);
         let mut processors = Vec::new();
         let output_prefix = Arc::new(output_prefix);
-        for stage in &mut stages {
-            for transform in &mut stage.transforms {
-                transform
-                    .initialize(&output_prefix, &output_directory)
-                    .unwrap();
-            }
-        }
 
         for (stage_no, stage) in stages.into_iter().enumerate() {
             let local_thread_count = if stage.needs_serial { 1 } else { thread_count };
@@ -828,7 +830,7 @@ fn output_block(
                     block,
                     &mut output_files[ii],
                     interleaved,
-                    Some(ii as u16 + 1) ,
+                    Some(ii as u16 + 1),
                 );
             }
         }
@@ -910,7 +912,7 @@ fn output_block_inner(
         let mut pseudo_iter = if let Some(demultiplex_tag) = demultiplex_tag {
             block
                 .unwrap()
-                .get_pseudo_iter_with_tag(demultiplex_tag, output_tags.as_ref().unwrap())
+                .get_pseudo_iter_filtered_to_tag(demultiplex_tag, output_tags.as_ref().unwrap())
         } else {
             block.unwrap().get_pseudo_iter()
         };
@@ -945,12 +947,12 @@ fn output_block_interleaved(
 ) {
     if let Some(of) = output_file {
         let mut pseudo_iter = if let Some(demultiplex_tag) = demultiplex_tag {
-            block_r1.get_pseudo_iter_with_tag(demultiplex_tag, output_tags.as_ref().unwrap())
+            block_r1.get_pseudo_iter_filtered_to_tag(demultiplex_tag, output_tags.as_ref().unwrap())
         } else {
             block_r1.get_pseudo_iter()
         };
         let mut pseudo_iter_2 = if let Some(demultiplex_tag) = demultiplex_tag {
-            block_r2.get_pseudo_iter_with_tag(demultiplex_tag, output_tags.as_ref().unwrap())
+            block_r2.get_pseudo_iter_filtered_to_tag(demultiplex_tag, output_tags.as_ref().unwrap())
         } else {
             block_r2.get_pseudo_iter()
         };

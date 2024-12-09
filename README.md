@@ -609,14 +609,12 @@ Options unrelated to the transformations
 [options]
     thread_count = 12  # number of cores to use. default: -1 = all cores.
     block_size = 10_000 # how many reads per block to process
+                        # lower this if your reads are very large
 ```
-
-Thread_count is in addition to the input & output threads,
-and controls how many concurrent 'processing' threads are used.
 
 # Rejected ideas
 
-## Based on averaging phred scores
+## Anything based on averaging phred scores
 
 Based on the average quality in a sliding window.
 Arithmetic averaging of phred scores is wrong.
@@ -630,7 +628,23 @@ Arithmetic averaging of phred scores is wrong.
 
 ### demultiplex
 
-iupac /N barcodes, base validation
+iupac /N barcodes (especially with regards to hamming distance)
+
+### other
+
+- Test with very long (1MB) reads.
+- test for report across demultiplex boundaries
+- stdin input (+- interleaved)
+- CountForReport
+
+```
+[[transform]]
+    action = "CountForReport"
+    tag = "Between Step 3 and 4"
+```
+Include a count of reads in this processing step in the report.
+Does not cross 'demultiplex' boundaries.
+
 
 ### Remaining trimmomatic options we might support
 
@@ -644,7 +658,6 @@ maximise the value of each read
 
 ### Remaining ideas from other programs...
 
-- interleaved fastqs.
 
 ```
  -A, --disable_adapter_trimming       adapter trimming is enabled by default. If this option is specified, adapter trimming is disabled

@@ -1190,7 +1190,7 @@ fn test_report() {
 }
 
 #[test]
-fn test_report_no_outpu() {
+fn test_report_no_output() {
     //
     let td = run("
 [input]
@@ -1216,6 +1216,7 @@ fn test_report_no_outpu() {
         &std::fs::read_to_string(td.path().join("output_xyz.json")).unwrap(),
     )
     .unwrap();
+    dbg!(&v);
     assert_eq!(v["read_count"], 10);
     assert_eq!(v["read1"]["total_bases"], 510);
     assert_eq!(v["read1"]["q20_bases"], 234);
@@ -1326,6 +1327,7 @@ fn test_report_pe() {
         &std::fs::read_to_string(td.path().join("output_xyz.json")).unwrap(),
     )
     .unwrap();
+    dbg!(&vv);
     assert_eq!(vv["read_count"], 10000);
     assert_eq!(vv["read1"]["duplicate_count"], 787);
     assert_eq!(vv["read1"]["length_distribution"][150], 10000);
@@ -2130,10 +2132,22 @@ fn test_simple_demultiplex_basics() {
     prefix = 'output'
     format = 'Raw'
 
+[[transform]]
+    action = 'Report'
+    infix = 'start'
+    json = true
+    html = false
+
 
 [[transform]]
     action = 'Head'
-    n = 10
+    n = 100
+
+[[transform]]
+    action = 'Report'
+    infix = 'pre_multiplex'
+    json = true
+    html = false
 
 [[transform]]
     action = 'Demultiplex'
@@ -2146,6 +2160,19 @@ fn test_simple_demultiplex_basics() {
 [transform.barcodes]
     CT = 'aaaa'
     TT = 'gggg'
+
+[[transform]]
+    action = 'Head'
+    n = 10
+
+
+[[transform]]
+    action = 'Report' # max 10 output reads
+    infix = 'post_multiplex'
+    json = true
+    html = false
+
+
 ");
 
     assert!(!td.path().join("output_1.fq").exists());
@@ -2168,7 +2195,49 @@ fn test_simple_demultiplex_basics() {
     assert!(lines_barcode1 == 2 * 4);
     assert!(lines_barcode2 == 1 * 4); //double check this, number might be wrong
     assert!(lines_no_barcode == (10 - 2 - 1) * 4);
+
+    let v = serde_json::from_str::<serde_json::Value>(
+        &ex::fs::read_to_string(td.path().join("output_start.json")).unwrap(),
+    )
+    .unwrap();
+    let rc: u64 = v["read_count"].as_number().unwrap().as_u64().unwrap();
+    assert!(rc >= 100u64);
+
+    let v = serde_json::from_str::<serde_json::Value>(
+        &ex::fs::read_to_string(td.path().join("output_pre_multiplex.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(v["read_count"], 10);
+
+    let v = serde_json::from_str::<serde_json::Value>(
+        &ex::fs::read_to_string(td.path().join("output_post_multiplex_aaaa.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(v["read_count"], 2);
+
+    let v = serde_json::from_str::<serde_json::Value>(
+        &ex::fs::read_to_string(td.path().join("output_post_multiplex_gggg.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(v["read_count"], 1);
+
+    let v = serde_json::from_str::<serde_json::Value>(
+        &ex::fs::read_to_string(td.path().join("output_post_multiplex_no-barcode.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(v["read_count"], 10 - 2 - 1);
 }
+
+#[test]
+fn test_report_infixes_are_distinct() {
+    todo!();
+}
+
+#[test]
+fn test_barcode_outputs_are_distinct() {
+    todo!();
+}
+
 
 #[test]
 fn test_simple_demultiplex_no_unmatched() {
@@ -2296,7 +2365,6 @@ fn test_simple_demultiplex_single_barcode() {
     prefix = 'output'
     format = 'Raw'
 
-
 [[transform]]
     action = 'Head'
     n = 10
@@ -2326,7 +2394,7 @@ fn test_simple_demultiplex_single_barcode() {
         .unwrap()
         .lines()
         .count();
-        let lines_no_barcode = ex::fs::read_to_string(td.path().join("output_no-barcode_1.fq"))
+    let lines_no_barcode = ex::fs::read_to_string(td.path().join("output_no-barcode_1.fq"))
         .unwrap()
         .lines()
         .count();
